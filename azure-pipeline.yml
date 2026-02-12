@@ -13,6 +13,7 @@ parameters:
   default: true
 
 stages:
+  # 1. Scanning Stage
   - stage: Scannigtool
     jobs:
       - job: ruffsacn
@@ -23,86 +24,87 @@ stages:
           continueOnError: true
           inputs:
             targetType: 'inline'
-            script: 'ruff check'
+            # Backend folder mein ja kar scan karein
+            script: |
+              cd PyTodoBackendMonolith
+              ruff check
 
-  - stage: publishArtifact
+  # 2. Backend Stage
+  - stage: publishBackend
+    dependsOn: Scannigtool
+    condition: and(succeeded(), eq(${{ parameters.deployBackend }}, true))
     jobs:
       - job: publishArtifact
-        condition: eq(${{ parameters.deployBackend }}, true)
-        displayName: Publish Artifact
         steps:
         - task: PublishPipelineArtifact@1
-          displayName: Publish Artifact
           inputs:
-            targetPath: '$(System.DefaultWorkingDirectory)'
+            targetPath: 'PyTodoBackendMonolith'
             artifact: 'pyapp'
-            publishLocation: 'pipeline'
 
-  - stage: DeploytoVM
+  # 3. Backend Deployment
+  - stage: DeployBackendtoVM
+    dependsOn: publishBackend
     jobs:
-    - deployment: 
-      environment:
-       name: todo-ui-app
-      #  resourceType: virtualMachine
-       resourceName: backend-python-vm
+    - deployment: deploy_backend
+      environment: 
+        name: todo-ui-app
+        resourceName: backend-python-vm
       strategy: 
-       runOnce:
-         deploy:
-           steps:
-           - task: DownloadPipelineArtifact@2
-             displayName: Download Artifact
-             inputs:
-               buildType: 'current'
-               artifactName: 'pyapp'
-               targetPath: '$(Pipeline.Workspace)pyapp'
+        runOnce:
+          deploy:
+            steps:
+            - task: DownloadPipelineArtifact@2
+              inputs:
+                buildType: 'current'
+                artifactName: 'pyapp'
+                targetPath: '$(Pipeline.Workspace)/pyapp'
+            - task: Bash@3
+              inputs:
+                targetType: 'inline'
+                script: 'cp -r $(Pipeline.Workspace)/pyapp/* /home/username/app/'
 
-           - task: Bash@3
-             displayName: Copy Artifact to VM
-             inputs:
-               targetType: 'inline'
-               script: 'cp -r $(Pipeline.Workspace)/pyapp /home/username/'
-
-  - stage: build
+  # 4. Frontend Build Stage
+  - stage: buildFrontend
+    dependsOn: Scannigtool
+    condition: and(succeeded(), eq(${{ parameters.deployFrontend }}, true))
     jobs: 
      - job: build
        steps:
        - task: NodeTool@0
          inputs:
-           versionSource: 'spec'
            versionSpec: '16.x'
-       - task: PowerShell@2
+       - task: Bash@3
+         displayName: Build React App
          inputs:
            targetType: 'inline'
-           script: 'npm install'
-       - task: PowerShell@2
-         inputs:
-           targetType: 'inline'
-           script: 'npm run build'
+           # Folder ke andar ja kar install aur build karein
+           workingDirectory: 'ReactTodoUIMonolith'
+           script: |
+             npm install
+             npm run build
        - task: PublishPipelineArtifact@1
          inputs:
-           targetPath: '$(System.DefaultWorkingDirectory)/build'
+           targetPath: 'ReactTodoUIMonolith/build'
            artifact: 'todouiapp'
-           publishLocation: 'pipeline'
-  - stage: deployment_to_vm
+
+  # 5. Frontend Deployment
+  - stage: DeployFrontendtoVM
+    dependsOn: buildFrontend
     jobs: 
-    - deployment: deploytovm
-      environment:
+    - deployment: deploy_ui
+      environment: 
         name: app-env-deploy
         resourceType: VirtualMachine
       strategy:
-       runOnce:
-         deploy:
-           steps:
-           - task: DownloadPipelineArtifact@2
-             inputs:
-               buildType: 'specific'
-               project: 'a0f1484e-6430-4e5a-a152-69063a459b63'
-               definition: '52'
-               buildVersionToDownload: 'specific'
-               pipelineId: '668'
-               artifactName: 'todouiapp'
-               targetPath: '$(Pipeline.Workspace)'
-           - task: Bash@3
-             inputs:
-                targetType: 'inline'
-                script: 'sudo cp -r $(Pipeline.Workspace)/* /var/www/html'
+        runOnce:
+          deploy:
+            steps:
+            - task: DownloadPipelineArtifact@2
+              inputs:
+                buildType: 'current'
+                artifactName: 'todouiapp'
+                targetPath: '$(Pipeline.Workspace)/ui'
+            - task: Bash@3
+              inputs:
+                 targetType: 'inline'
+                 script: 'sudo cp -r $(Pipeline.Workspace)/ui/* /var/www/html/'
